@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 )
 
@@ -36,9 +37,9 @@ func main() {
 	switch archiveType {
 	case "zip":
 		err = unzip(archivePath, destDir)
-	case "tar", "tar.gz", "tar.bz2", "tar.xz", "tar.lz", "tar.lzma":
+	case "tar", "tar.gz", "tar.bz2", "tar.xz", "tar.lz", "tar.lzma", "tar.zst":
 		err = untar(archivePath, destDir)
-	case "gz", "bz2", "xz", "lz", "lzma":
+	case "gz", "bz2", "xz", "lz", "lzma", "zst":
 		err = extractSingleFile(archivePath, destDir, archiveType)
 	case "7z", "rar":
 		err = extractWith7z(archivePath, destDir)
@@ -80,6 +81,8 @@ func detectArchiveType(filePath string) (string, error) {
 		return "rar", nil
 	case bytes.HasPrefix(buf, []byte{0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}):
 		return "7z", nil
+	case bytes.HasPrefix(buf, []byte{0x28, 0xB5, 0x2F, 0xFD}):
+		return "tar.zst", nil
 	default:
 		ext := filepath.Ext(filePath)
 		switch ext {
@@ -93,6 +96,8 @@ func detectArchiveType(filePath string) (string, error) {
 			return "lz", nil
 		case ".lzma":
 			return "lzma", nil
+		case ".zst":
+			return "zst", nil
 		case ".tar":
 			return "tar", nil
 		case ".tar.lz":
@@ -165,8 +170,13 @@ func untar(src, dest string) error {
 			return err
 		}
 		fileReader = xzr
-	case bytes.HasPrefix(buf, []byte{0x5D, 0x00, 0x00, 0x80}):
-		return fmt.Errorf("lz or lzma tar extraction not supported natively")
+	case bytes.HasPrefix(buf, []byte{0x28, 0xB5, 0x2F, 0xFD}):
+		zr, err := zstd.NewReader(f)
+		if err != nil {
+			return err
+		}
+		defer zr.Close()
+		fileReader = zr
 	}
 
 	tr := tar.NewReader(fileReader)
@@ -207,6 +217,8 @@ func extractSingleFile(src, dest, typ string) error {
 		cmd = exec.Command("bunzip2", "-k", "-c", src)
 	case "xz":
 		cmd = exec.Command("unxz", "-k", "-c", src)
+	case "zst":
+		cmd = exec.Command("unzstd", "-k", "-c", src)
 	default:
 		return fmt.Errorf("unsupported single file compression type")
 	}
