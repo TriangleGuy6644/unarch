@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
@@ -23,9 +24,17 @@ func main() {
 	}
 
 	archivePath := os.Args[1]
-	destDir := "."
+	destDir := ""
 	if len(os.Args) >= 3 {
 		destDir = os.Args[2]
+	} else {
+		base := filepath.Base(archivePath)
+		ext := filepath.Ext(base)
+		destDir = strings.TrimSuffix(base, ext)
+	}
+
+	if _, err := os.Stat(destDir); os.IsNotExist(err) {
+		os.MkdirAll(destDir, os.ModePerm)
 	}
 
 	archiveType, err := detectArchiveType(archivePath)
@@ -239,4 +248,3 @@ func extractWith7z(src, dest string) error {
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
-
