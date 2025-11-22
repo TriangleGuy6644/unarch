@@ -17,7 +17,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: unarch <archive_file> [destination]")
+		fmt.Println("usage: unarch <archive_file> [destination].")
 		os.Exit(1)
 	}
 
@@ -29,30 +29,31 @@ func main() {
 
 	archiveType, err := detectArchiveType(archivePath)
 	if err != nil {
-		fmt.Println("Error detecting archive type:", err)
+		fmt.Println("error detecting archive type:", err)
 		os.Exit(1)
 	}
 
 	switch archiveType {
 	case "zip":
 		err = unzip(archivePath, destDir)
-	case "tar", "tar.gz", "tar.bz2", "tar.xz":
+	case "tar", "tar.gz", "tar.bz2", "tar.xz", "tar.lz", "tar.lzma":
 		err = untar(archivePath, destDir)
+	case "gz", "bz2", "xz", "lz", "lzma":
+		err = extractSingleFile(archivePath, destDir, archiveType)
 	case "7z", "rar":
 		err = extractWith7z(archivePath, destDir)
 	default:
-		fmt.Println("Unsupported archive type")
+		fmt.Println("unsupported archive type.")
 		os.Exit(1)
 	}
 
 	if err != nil {
-		fmt.Println("Extraction error:", err)
+		fmt.Println("extraction error:", err)
 		os.Exit(1)
 	}
-	fmt.Println("Extraction complete!")
+	fmt.Println("extraction complete.")
 }
 
-// ---------------- Detect Archive Type ----------------
 func detectArchiveType(filePath string) (string, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -80,11 +81,30 @@ func detectArchiveType(filePath string) (string, error) {
 	case bytes.HasPrefix(buf, []byte{0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}):
 		return "7z", nil
 	default:
-		return "", fmt.Errorf("unknown archive type")
+		ext := filepath.Ext(filePath)
+		switch ext {
+		case ".gz":
+			return "gz", nil
+		case ".bz2":
+			return "bz2", nil
+		case ".xz":
+			return "xz", nil
+		case ".lz":
+			return "lz", nil
+		case ".lzma":
+			return "lzma", nil
+		case ".tar":
+			return "tar", nil
+		case ".tar.lz":
+			return "tar.lz", nil
+		case ".tar.lzma":
+			return "tar.lzma", nil
+		default:
+			return "", fmt.Errorf("unknown archive type")
+		}
 	}
 }
 
-// ---------------- Zip ----------------
 func unzip(src, dest string) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
@@ -98,21 +118,15 @@ func unzip(src, dest string) error {
 			os.MkdirAll(fpath, os.ModePerm)
 			continue
 		}
-
-		if err := os.MkdirAll(filepath.Dir(fpath), os.ModePerm); err != nil {
-			return err
-		}
-
+		os.MkdirAll(filepath.Dir(fpath), os.ModePerm)
 		outFile, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
 		if err != nil {
 			return err
 		}
-
 		rc, err := f.Open()
 		if err != nil {
 			return err
 		}
-
 		_, err = io.Copy(outFile, rc)
 		outFile.Close()
 		rc.Close()
@@ -123,7 +137,6 @@ func unzip(src, dest string) error {
 	return nil
 }
 
-// ---------------- Tar ----------------
 func untar(src, dest string) error {
 	f, err := os.Open(src)
 	if err != nil {
@@ -131,12 +144,10 @@ func untar(src, dest string) error {
 	}
 	defer f.Close()
 
-	var fileReader io.Reader = f
-
-	// detect compression by magic bytes
 	buf := make([]byte, 6)
 	_, _ = f.Read(buf)
 	f.Seek(0, io.SeekStart)
+	var fileReader io.Reader = f
 
 	switch {
 	case bytes.HasPrefix(buf, []byte{0x1F, 0x8B}):
@@ -154,6 +165,8 @@ func untar(src, dest string) error {
 			return err
 		}
 		fileReader = xzr
+	case bytes.HasPrefix(buf, []byte{0x5D, 0x00, 0x00, 0x80}):
+		return fmt.Errorf("lz or lzma tar extraction not supported natively")
 	}
 
 	tr := tar.NewReader(fileReader)
@@ -165,7 +178,6 @@ func untar(src, dest string) error {
 		if err != nil {
 			return err
 		}
-
 		target := filepath.Join(dest, header.Name)
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -186,10 +198,33 @@ func untar(src, dest string) error {
 	return nil
 }
 
-// ---------------- 7z / Rar ----------------
+func extractSingleFile(src, dest, typ string) error {
+	var cmd *exec.Cmd
+	switch typ {
+	case "gz":
+		cmd = exec.Command("gunzip", "-k", "-c", src)
+	case "bz2":
+		cmd = exec.Command("bunzip2", "-k", "-c", src)
+	case "xz":
+		cmd = exec.Command("unxz", "-k", "-c", src)
+	default:
+		return fmt.Errorf("unsupported single file compression type")
+	}
+	outPath := filepath.Join(dest, filepath.Base(src))
+	outFile, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+	cmd.Stdout = outFile
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func extractWith7z(src, dest string) error {
 	cmd := exec.Command("7z", "x", src, "-o"+dest, "-y")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
